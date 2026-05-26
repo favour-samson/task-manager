@@ -1,150 +1,164 @@
 # GCP Deployment Guide
 
-This document outlines how this application would be deployed to Google Cloud Platform.
+> **Note:** This document explains how this application would be deployed to Google Cloud Platform (GCP).
 
 ---
 
-## Architecture Overview
+## What is GCP?
 
-| Component | GCP Service |
-|---|---|
-| Frontend | Cloud Run (containerised Next.js) |
-| Backend API | Cloud Run (containerised Express) |
-| Database | MongoDB Atlas (external, connected over TLS) |
-| Secrets | Secret Manager |
-| Docker images | Artifact Registry |
+Google Cloud Platform is Google's cloud hosting service. Instead of running your app on your own computer or server, you run it on Google's infrastructure. This means it's available 24/7, can scale automatically, and you only pay for what you use.
 
----
 
-## 1. Frontend — Cloud Run
+## Step 1 — The Database (MongoDB Atlas)
 
-The Next.js app is built into a Docker image and deployed as a Cloud Run service.
+Before deploying anything to GCP, the database needs to be set up first because the backend needs a database URL to connect to.
 
-```dockerfile
-# frontend/Dockerfile
-FROM node:20-alpine AS builder
-WORKDIR /app
-COPY package*.json ./
-RUN npm ci
-COPY . .
-RUN npm run build
+**What is MongoDB Atlas?**
+MongoDB Atlas is a managed cloud database. Instead of installing MongoDB yourself, Atlas handles everything — backups, scaling, security. It has a free tier which is enough for this project.
 
-FROM node:20-alpine
-WORKDIR /app
-COPY --from=builder /app/.next/standalone ./
-COPY --from=builder /app/.next/static ./.next/static
-COPY --from=builder /app/public ./public
-EXPOSE 3000
-CMD ["node", "server.js"]
+
+1. Go to [mongodb.com/cloud/atlas](https://www.mongodb.com/cloud/atlas) and create a free account
+2. Create a new cluster (a "cluster" is just your database server)
+3. Create a database user with a username and password
+4. Get your connection string — it looks like this:
+   ```
+   mongodb+srv://username:password@cluster0.xxxxx.mongodb.net/pac-technologies
+   ```
+5. Allow connections from anywhere (`0.0.0.0/0`) for now, or from GCP's IP range for better security
+
+This connection string gets stored as a secret in the next step.
+
+
+## Step 2 — Storing Secrets (Secret Manager)
+
+**What is Secret Manager?**
+It's like a secure vault for sensitive values like passwords and API keys. Instead of putting them directly in your code, you store them in Secret Manager and GCP injects them into your app at runtime.
+
+```
+JWT_SECRET          → the secret used to sign login tokens
+JWT_REFRESH_SECRET  → the secret used to sign refresh tokens
+MONGO_URI           → the MongoDB Atlas connection string from Step 1
 ```
 
-Next.js `output: 'standalone'` must be enabled in `next.config.ts`.
-
-Deploy:
+In practice, you would run these commands using the `gcloud` CLI tool:
 
 ```bash
-gcloud run deploy task-manager-frontend \
-  --image REGION-docker.pkg.dev/PROJECT/task-manager/frontend:latest \
-  --region REGION \
-  --allow-unauthenticated \
-  --set-env-vars NEXT_PUBLIC_API_URL=https://BACKEND_CLOUD_RUN_URL
+# You would run these once to create the secrets
+gcloud secrets create jwt-secret --data-file=-          # then type the value
+gcloud secrets create jwt-refresh-secret --data-file=-
+gcloud secrets create mongo-uri --data-file=-
+```
+
+The backend Cloud Run service would then be given permission to read these secrets, and GCP automatically injects them as environment variables when the container starts.
+
+---
+
+## Step 3 — Storing Docker Images (Artifact Registry)
+
+**What is Artifact Registry?**
+When you run `docker build`, it creates a Docker image (a packaged version of your app). Artifact Registry is where you store those images so GCP can pull them when deploying.
+
+Think of it like GitHub, but for Docker images instead of code.
+
+
+```bash
+# Create a repository to store your images
+gcloud artifacts repositories create task-manager \
+  --repository-format=docker \
+  --location=us-central1
+
+# Build and push the backend image
+docker build -t us-central1-docker.pkg.dev/YOUR_PROJECT/task-manager/backend:latest ./backend
+docker push us-central1-docker.pkg.dev/YOUR_PROJECT/task-manager/backend:latest
+
+# Build and push the frontend image
+docker build \
+  --build-arg NEXT_PUBLIC_API_URL=https://YOUR_BACKEND_URL \
+  -t us-central1-docker.pkg.dev/YOUR_PROJECT/task-manager/frontend:latest ./frontend
+docker push us-central1-docker.pkg.dev/YOUR_PROJECT/task-manager/frontend:latest
 ```
 
 ---
 
-## 2. Backend API — Cloud Run
+## Step 4 — Deploying the Backend (Cloud Run)
 
-The Express API is containerised and deployed similarly.
+**What is Cloud Run?**
+Cloud Run runs Docker containers. You give it a Docker image, tell it which port to listen on, and it handles everything else, starting the container, scaling it up if there's more traffic, and shutting it down when idle (to save costs).
 
-```dockerfile
-# backend/Dockerfile
-FROM node:20-alpine AS builder
-WORKDIR /app
-COPY package*.json tsconfig.json ./
-RUN npm ci
-COPY src ./src
-RUN npm run build
-
-FROM node:20-alpine
-WORKDIR /app
-COPY --from=builder /app/dist ./dist
-COPY package*.json ./
-RUN npm ci --omit=dev
-EXPOSE 5000
-CMD ["node", "dist/index.js"]
-```
-
-Deploy:
 
 ```bash
 gcloud run deploy task-manager-backend \
-  --image REGION-docker.pkg.dev/PROJECT/task-manager/backend:latest \
-  --region REGION \
+  --image us-central1-docker.pkg.dev/YOUR_PROJECT/task-manager/backend:latest \
+  --region us-central1 \
   --allow-unauthenticated \
-  --set-secrets JWT_SECRET=jwt-secret:latest,JWT_REFRESH_SECRET=jwt-refresh-secret:latest,MONGO_URI=mongo-uri:latest \
-  --set-env-vars PORT=5000,NODE_ENV=production,FRONTEND_URL=https://FRONTEND_CLOUD_RUN_URL
+  --port 5000 \
+  --set-secrets MONGO_URI=mongo-uri:latest,JWT_SECRET=jwt-secret:latest,JWT_REFRESH_SECRET=jwt-refresh-secret:latest \
+  --set-env-vars PORT=5000,NODE_ENV=production,FRONTEND_URL=https://YOUR_FRONTEND_URL
 ```
 
----
-
-## 3. MongoDB — MongoDB Atlas
-
-MongoDB Atlas is the recommended approach — no self-managed infrastructure required.
-
-Steps:
-1. Create a free/paid cluster on [MongoDB Atlas](https://cloud.mongodb.com).
-2. Whitelist Cloud Run's egress IP range **or** enable VPC peering / Private Service Connect for production.
-3. Store the connection string (with credentials) in **Secret Manager** as `mongo-uri`.
-
-Alternatively, a self-hosted option using **Cloud SQL** is not suitable for MongoDB. For a GCP-native option, **Firestore** could replace MongoDB, but would require application changes.
+After running this, GCP gives you a URL like `https://task-manager-backend-xxxx-uc.a.run.app`. That is your live backend URL.
 
 ---
 
-## 4. Environment Variables — Secret Manager
+## Step 5 — Deploying the Frontend (Cloud Run)
 
-Sensitive values are stored in GCP Secret Manager and injected at runtime:
+The frontend is deployed the same way. The key difference is that `NEXT_PUBLIC_API_URL` must point to the backend URL from Step 4, and it needs to be set **at build time** (when you build the Docker image), not at runtime, because Next.js bakes it into the JavaScript bundle.
+
 
 ```bash
-# Create secrets
-echo -n "supersecretjwt" | gcloud secrets create jwt-secret --data-file=-
-echo -n "supersecretrefresh" | gcloud secrets create jwt-refresh-secret --data-file=-
-echo -n "mongodb+srv://..." | gcloud secrets create mongo-uri --data-file=-
+# Re-build the frontend image with the real backend URL
+docker build \
+  --build-arg NEXT_PUBLIC_API_URL=https://task-manager-backend-xxxx-uc.a.run.app \
+  -t us-central1-docker.pkg.dev/YOUR_PROJECT/task-manager/frontend:latest ./frontend
+docker push us-central1-docker.pkg.dev/YOUR_PROJECT/task-manager/frontend:latest
+
+# Deploy to Cloud Run
+gcloud run deploy task-manager-frontend \
+  --image us-central1-docker.pkg.dev/YOUR_PROJECT/task-manager/frontend:latest \
+  --region us-central1 \
+  --allow-unauthenticated \
+  --port 3000
 ```
 
-Cloud Run automatically pulls secrets and injects them as environment variables via the `--set-secrets` flag. Non-sensitive config (PORT, NODE_ENV, URLs) is passed with `--set-env-vars`.
+GCP then gives you a URL like `https://task-manager-frontend-xxxx-uc.a.run.app`. That is your live app.
 
 ---
 
-## 5. Docker Images — Artifact Registry
+## Step 6 — Update the Backend CORS
 
-```bash
-# Create repository
-gcloud artifacts repositories create task-manager \
-  --repository-format=docker \
-  --location=REGION
-
-# Authenticate
-gcloud auth configure-docker REGION-docker.pkg.dev
-
-# Build and push
-docker build -t REGION-docker.pkg.dev/PROJECT/task-manager/backend:latest ./backend
-docker push REGION-docker.pkg.dev/PROJECT/task-manager/backend:latest
-
-docker build -t REGION-docker.pkg.dev/PROJECT/task-manager/frontend:latest ./frontend
-docker push REGION-docker.pkg.dev/PROJECT/task-manager/frontend:latest
-```
-
-For CI/CD, **Cloud Build** can automate builds and pushes on every git push.
+Once you have both URLs, go back and update the backend's `FRONTEND_URL` environment variable in Cloud Run to the real frontend URL. This ensures the backend only accepts requests from your frontend, not from anyone else.
 
 ---
 
-## 6. Security Considerations
+## Security Considerations
 
-- **Secrets** — Never commit `.env` files. All secrets live in Secret Manager with IAM-restricted access (least privilege).
-- **CORS** — The backend only allows requests from the frontend's Cloud Run URL (`FRONTEND_URL`).
-- **HTTPS** — Cloud Run enforces HTTPS by default on all services. HTTP is redirected.
-- **JWT** — Access tokens expire in 1 hour. Refresh tokens are httpOnly cookies (7 days) and are rotated on each use.
-- **Container security** — Images run as non-root (use `USER node` in Dockerfile). Dependabot or `npm audit` should be enabled.
-- **MongoDB** — Enable Atlas IP Access List. Avoid `0.0.0.0/0`. Use a dedicated DB user with minimal permissions.
-- **IAM** — Each Cloud Run service should use a dedicated Service Account with only the permissions it needs (e.g., `secretmanager.secretAccessor`).
-- **VPC** — For production, place Cloud Run services inside a Shared VPC and use Private Service Connect to reach MongoDB Atlas without traversing the public internet.
+These are things you would think about for a real production deployment:
+
+- **Never commit `.env` files** — secrets go in Secret Manager, not in code
+- **HTTPS is automatic** — Cloud Run gives you HTTPS by default, no setup needed
+- **CORS** — the backend is configured to only allow requests from the frontend URL
+- **JWT expiry** — access tokens expire after 1 hour; refresh tokens after 7 days
+- **MongoDB Atlas** — restrict the IP allowlist to your Cloud Run services only (not `0.0.0.0/0`) for better security in production
+- **IAM (permissions)** — in a real setup, each service should only have the minimum permissions it needs. For example, the frontend container does not need access to Secret Manager at all
+
+---
+
+## Summary
+
+The full deployment flow in order:
+
+```
+1. Set up MongoDB Atlas cluster
+       
+2. Store secrets in GCP Secret Manager
+       
+3. Build Docker images and push to Artifact Registry
+       
+4. Deploy backend to Cloud Run → get backend URL
+       
+5. Rebuild frontend image with backend URL baked in
+       
+6. Deploy frontend to Cloud Run → get frontend URL
+       
+7. Update backend FRONTEND_URL to the real frontend URL
+```

@@ -7,6 +7,7 @@ import ProtectedRoute from "@/components/ProtectedRoute";
 import Navbar from "@/components/Navbar";
 import TaskCard from "@/components/TaskCard";
 import TaskForm from "@/components/TaskForm";
+import ConfirmModal from "@/components/ConfirmModal";
 import { taskApi, userApi } from "@/lib/api";
 import { Task, TaskFormData, User } from "@/types";
 
@@ -32,6 +33,7 @@ function DashboardContent() {
 
   const [showForm, setShowForm] = useState(false);
   const [editingTask, setEditingTask] = useState<Task | undefined>(undefined);
+  const [deletingTaskId, setDeletingTaskId] = useState<string | null>(null);
 
   const fetchTasks = useCallback(async () => {
     setLoadingTasks(true);
@@ -82,16 +84,16 @@ function DashboardContent() {
     fetchTasks();
   };
 
-  const handleDelete = async (id: string) => {
-    if (!confirm("Delete this task?")) return;
+  const handleDeleteConfirm = async () => {
+    if (!deletingTaskId) return;
     try {
-      await taskApi.delete(id);
+      await taskApi.delete(deletingTaskId);
       toast.success("Task deleted");
+      setDeletingTaskId(null);
       fetchTasks();
     } catch (err: unknown) {
-      toast.error(
-        err instanceof Error ? err.message : "Failed to delete task"
-      );
+      toast.error(err instanceof Error ? err.message : "Failed to delete task");
+      setDeletingTaskId(null);
     }
   };
 
@@ -100,6 +102,7 @@ function DashboardContent() {
     setShowForm(false);
     setEditingTask(undefined);
   };
+  const openDelete = (id: string) => setDeletingTaskId(id);
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -168,7 +171,7 @@ function DashboardContent() {
                     task={task}
                     showOwner={isAdmin}
                     onEdit={openEdit}
-                    onDelete={handleDelete}
+                    onDelete={openDelete}
                   />
                 ))}
               </div>
@@ -239,6 +242,15 @@ function DashboardContent() {
           initial={editingTask}
           onSubmit={editingTask ? handleUpdate : handleCreate}
           onCancel={closeForm}
+        />
+      )}
+
+      {deletingTaskId && (
+        <ConfirmModal
+          message="This task will be permanently deleted."
+          confirmLabel="Delete"
+          onConfirm={handleDeleteConfirm}
+          onCancel={() => setDeletingTaskId(null)}
         />
       )}
     </div>
