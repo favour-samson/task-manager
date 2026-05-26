@@ -112,13 +112,13 @@ Both prompt for name, email, and password, then save the user with `role: admin`
 
 ### Backend — `backend/.env`
 
-`PORT` - Server port 
-`MONGO_URI` - MongoDB connection string 
-`JWT_SECRET` - Access token signing secret 
-`JWT_EXPIRES_IN` - Access token expiry 
-`JWT_REFRESH_SECRET` - Refresh token signing secret 
-`FRONTEND_URL` - Allowed CORS origin 
-`NODE_ENV` - Environment 
+- `PORT` - Server port
+- `MONGO_URI` - MongoDB connection string
+- `JWT_SECRET` - Access token signing secret
+- `JWT_EXPIRES_IN` - Access token expiry
+- `JWT_REFRESH_SECRET` - Refresh token signing secret
+- `FRONTEND_URL` - Allowed CORS origin
+- `NODE_ENV` - Environment
 
 ### Frontend — `frontend/.env.local`
 
@@ -128,14 +128,14 @@ Both prompt for name, email, and password, then save the user with `role: admin`
 
 ## API Endpoints
 
-POST - `/api/auth/register` 
-POST - `/api/auth/login` 
-POST - `/api/auth/refresh` 
-POST - `/api/auth/logout` 
-GET - `/api/users` 
-GET - `/api/tasks` 
-POST - `/api/tasks` 
-PUT - `/api/tasks/:id` 
-DELETE - `/api/tasks/:id` 
+- POST - `/api/auth/register` 
+- POST - `/api/auth/login` 
+- POST - `/api/auth/refresh` 
+- POST - `/api/auth/logout` 
+- GET - `/api/users` 
+- GET - `/api/tasks` 
+- POST - `/api/tasks` 
+- PUT - `/api/tasks/:id` 
+- DELETE - `/api/tasks/:id` 
 
 
